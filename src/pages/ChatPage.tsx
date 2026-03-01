@@ -142,6 +142,15 @@ function cleanMessageContent(content: string): string {
   return content.trim()
 }
 
+function formatYmdDateFromSeconds(timestamp?: number): string {
+  if (!timestamp || !Number.isFinite(timestamp)) return '—'
+  const d = new Date(timestamp * 1000)
+  const y = d.getFullYear()
+  const m = `${d.getMonth() + 1}`.padStart(2, '0')
+  const day = `${d.getDate()}`.padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 interface ChatPageProps {
   // 保留接口以备将来扩展
 }
@@ -155,6 +164,15 @@ interface SessionDetail {
   alias?: string
   avatarUrl?: string
   messageCount: number
+  voiceMessages?: number
+  imageMessages?: number
+  videoMessages?: number
+  emojiMessages?: number
+  privateMutualGroups?: number
+  groupMemberCount?: number
+  groupMyMessages?: number
+  groupActiveSpeakers?: number
+  groupMutualFriends?: number
   firstMessageTime?: number
   latestMessageTime?: number
   messageTables: { dbName: string; tableName: string; count: number }[]
@@ -422,6 +440,15 @@ function ChatPage(_props: ChatPageProps) {
         alias: sameSession ? prev?.alias : undefined,
         avatarUrl: mappedSession?.avatarUrl || (sameSession ? prev?.avatarUrl : undefined),
         messageCount: hintedCount ?? (sameSession ? prev.messageCount : Number.NaN),
+        voiceMessages: sameSession ? prev?.voiceMessages : undefined,
+        imageMessages: sameSession ? prev?.imageMessages : undefined,
+        videoMessages: sameSession ? prev?.videoMessages : undefined,
+        emojiMessages: sameSession ? prev?.emojiMessages : undefined,
+        privateMutualGroups: sameSession ? prev?.privateMutualGroups : undefined,
+        groupMemberCount: sameSession ? prev?.groupMemberCount : undefined,
+        groupMyMessages: sameSession ? prev?.groupMyMessages : undefined,
+        groupActiveSpeakers: sameSession ? prev?.groupActiveSpeakers : undefined,
+        groupMutualFriends: sameSession ? prev?.groupMutualFriends : undefined,
         firstMessageTime: sameSession ? prev?.firstMessageTime : undefined,
         latestMessageTime: sameSession ? prev?.latestMessageTime : undefined,
         messageTables: sameSession && Array.isArray(prev?.messageTables) ? prev.messageTables : []
@@ -442,6 +469,15 @@ function ChatPage(_props: ChatPageProps) {
           alias: result.detail!.alias,
           avatarUrl: result.detail!.avatarUrl || prev?.avatarUrl,
           messageCount: Number.isFinite(result.detail!.messageCount) ? result.detail!.messageCount : prev?.messageCount ?? Number.NaN,
+          voiceMessages: prev?.voiceMessages,
+          imageMessages: prev?.imageMessages,
+          videoMessages: prev?.videoMessages,
+          emojiMessages: prev?.emojiMessages,
+          privateMutualGroups: prev?.privateMutualGroups,
+          groupMemberCount: prev?.groupMemberCount,
+          groupMyMessages: prev?.groupMyMessages,
+          groupActiveSpeakers: prev?.groupActiveSpeakers,
+          groupMutualFriends: prev?.groupMutualFriends,
           firstMessageTime: prev?.firstMessageTime,
           latestMessageTime: prev?.latestMessageTime,
           messageTables: Array.isArray(prev?.messageTables) ? (prev?.messageTables || []) : []
@@ -456,19 +492,49 @@ function ChatPage(_props: ChatPageProps) {
     }
 
     try {
-      const result = await window.electronAPI.chat.getSessionDetailExtra(normalizedSessionId)
+      const [extraResultSettled, statsResultSettled] = await Promise.allSettled([
+        window.electronAPI.chat.getSessionDetailExtra(normalizedSessionId),
+        window.electronAPI.chat.getExportSessionStats([normalizedSessionId])
+      ])
+
       if (requestSeq !== detailRequestSeqRef.current) return
-      if (result.success && result.detail) {
-        setSessionDetail((prev) => {
-          if (!prev || prev.wxid !== normalizedSessionId) return prev
-          return {
-            ...prev,
-            firstMessageTime: result.detail!.firstMessageTime,
-            latestMessageTime: result.detail!.latestMessageTime,
-            messageTables: Array.isArray(result.detail!.messageTables) ? result.detail!.messageTables : []
+
+      setSessionDetail((prev) => {
+        if (!prev || prev.wxid !== normalizedSessionId) return prev
+
+        let next = { ...prev }
+        if (extraResultSettled.status === 'fulfilled' && extraResultSettled.value.success && extraResultSettled.value.detail) {
+          next = {
+            ...next,
+            firstMessageTime: extraResultSettled.value.detail.firstMessageTime,
+            latestMessageTime: extraResultSettled.value.detail.latestMessageTime,
+            messageTables: Array.isArray(extraResultSettled.value.detail.messageTables) ? extraResultSettled.value.detail.messageTables : []
           }
-        })
-      }
+        }
+
+        if (statsResultSettled.status === 'fulfilled' && statsResultSettled.value.success && statsResultSettled.value.data) {
+          const metric = statsResultSettled.value.data[normalizedSessionId]
+          if (metric) {
+            next = {
+              ...next,
+              messageCount: Number.isFinite(metric.totalMessages) ? metric.totalMessages : next.messageCount,
+              voiceMessages: metric.voiceMessages,
+              imageMessages: metric.imageMessages,
+              videoMessages: metric.videoMessages,
+              emojiMessages: metric.emojiMessages,
+              privateMutualGroups: metric.privateMutualGroups,
+              groupMemberCount: metric.groupMemberCount,
+              groupMyMessages: metric.groupMyMessages,
+              groupActiveSpeakers: metric.groupActiveSpeakers,
+              groupMutualFriends: metric.groupMutualFriends,
+              firstMessageTime: Number.isFinite(metric.firstTimestamp) ? metric.firstTimestamp : next.firstMessageTime,
+              latestMessageTime: Number.isFinite(metric.lastTimestamp) ? metric.lastTimestamp : next.latestMessageTime
+            }
+          }
+        }
+
+        return next
+      })
     } catch (e) {
       console.error('加载会话详情补充统计失败:', e)
     } finally {
@@ -2591,22 +2657,99 @@ function ChatPage(_props: ChatPageProps) {
                       <div className="detail-section">
                         <div className="section-title">
                           <MessageSquare size={14} />
-                          <span>消息统计</span>
+                          <span>消息统计（导出口径）</span>
                         </div>
                         <div className="detail-item">
                           <span className="label">消息总数</span>
                           <span className="value highlight">
                             {Number.isFinite(sessionDetail.messageCount)
                               ? sessionDetail.messageCount.toLocaleString()
-                              : (isLoadingDetail ? '统计中...' : '—')}
+                              : ((isLoadingDetail || isLoadingDetailExtra) ? '统计中...' : '—')}
                           </span>
                         </div>
+                        <div className="detail-item">
+                          <span className="label">语音</span>
+                          <span className="value">
+                            {Number.isFinite(sessionDetail.voiceMessages)
+                              ? (sessionDetail.voiceMessages as number).toLocaleString()
+                              : (isLoadingDetailExtra ? '统计中...' : '—')}
+                          </span>
+                        </div>
+                        <div className="detail-item">
+                          <span className="label">图片</span>
+                          <span className="value">
+                            {Number.isFinite(sessionDetail.imageMessages)
+                              ? (sessionDetail.imageMessages as number).toLocaleString()
+                              : (isLoadingDetailExtra ? '统计中...' : '—')}
+                          </span>
+                        </div>
+                        <div className="detail-item">
+                          <span className="label">视频</span>
+                          <span className="value">
+                            {Number.isFinite(sessionDetail.videoMessages)
+                              ? (sessionDetail.videoMessages as number).toLocaleString()
+                              : (isLoadingDetailExtra ? '统计中...' : '—')}
+                          </span>
+                        </div>
+                        <div className="detail-item">
+                          <span className="label">表情包</span>
+                          <span className="value">
+                            {Number.isFinite(sessionDetail.emojiMessages)
+                              ? (sessionDetail.emojiMessages as number).toLocaleString()
+                              : (isLoadingDetailExtra ? '统计中...' : '—')}
+                          </span>
+                        </div>
+                        {sessionDetail.wxid.includes('@chatroom') ? (
+                          <>
+                            <div className="detail-item">
+                              <span className="label">我发的消息数</span>
+                              <span className="value">
+                                {Number.isFinite(sessionDetail.groupMyMessages)
+                                  ? (sessionDetail.groupMyMessages as number).toLocaleString()
+                                  : (isLoadingDetailExtra ? '统计中...' : '—')}
+                              </span>
+                            </div>
+                            <div className="detail-item">
+                              <span className="label">群人数</span>
+                              <span className="value">
+                                {Number.isFinite(sessionDetail.groupMemberCount)
+                                  ? (sessionDetail.groupMemberCount as number).toLocaleString()
+                                  : (isLoadingDetailExtra ? '统计中...' : '—')}
+                              </span>
+                            </div>
+                            <div className="detail-item">
+                              <span className="label">群发言人数</span>
+                              <span className="value">
+                                {Number.isFinite(sessionDetail.groupActiveSpeakers)
+                                  ? (sessionDetail.groupActiveSpeakers as number).toLocaleString()
+                                  : (isLoadingDetailExtra ? '统计中...' : '—')}
+                              </span>
+                            </div>
+                            <div className="detail-item">
+                              <span className="label">群共同好友数</span>
+                              <span className="value">
+                                {Number.isFinite(sessionDetail.groupMutualFriends)
+                                  ? (sessionDetail.groupMutualFriends as number).toLocaleString()
+                                  : (isLoadingDetailExtra ? '统计中...' : '—')}
+                              </span>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="detail-item">
+                            <span className="label">共同群聊数</span>
+                            <span className="value">
+                              {Number.isFinite(sessionDetail.privateMutualGroups)
+                                ? (sessionDetail.privateMutualGroups as number).toLocaleString()
+                                : (isLoadingDetailExtra ? '统计中...' : '—')}
+                            </span>
+                          </div>
+                        )}
                         <div className="detail-item">
                           <Calendar size={14} />
                           <span className="label">首条消息</span>
                           <span className="value">
-                            {Number.isFinite(sessionDetail.firstMessageTime)
-                              ? new Date((sessionDetail.firstMessageTime as number) * 1000).toLocaleDateString('zh-CN')
+                            {sessionDetail.firstMessageTime
+                              ? formatYmdDateFromSeconds(sessionDetail.firstMessageTime)
                               : (isLoadingDetailExtra ? '统计中...' : '—')}
                           </span>
                         </div>
@@ -2614,8 +2757,8 @@ function ChatPage(_props: ChatPageProps) {
                           <Calendar size={14} />
                           <span className="label">最新消息</span>
                           <span className="value">
-                            {Number.isFinite(sessionDetail.latestMessageTime)
-                              ? new Date((sessionDetail.latestMessageTime as number) * 1000).toLocaleDateString('zh-CN')
+                            {sessionDetail.latestMessageTime
+                              ? formatYmdDateFromSeconds(sessionDetail.latestMessageTime)
                               : (isLoadingDetailExtra ? '统计中...' : '—')}
                           </span>
                         </div>
