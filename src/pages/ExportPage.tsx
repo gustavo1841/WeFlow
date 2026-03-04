@@ -863,12 +863,6 @@ function ExportPage() {
   const [contactsLoadIssue, setContactsLoadIssue] = useState<ContactsLoadIssue | null>(null)
   const [showContactsDiagnostics, setShowContactsDiagnostics] = useState(false)
   const [contactsDiagnosticTick, setContactsDiagnosticTick] = useState(Date.now())
-  const [contactsAvatarEnrichProgress, setContactsAvatarEnrichProgress] = useState({
-    loaded: 0,
-    total: 0,
-    running: false,
-    tab: null as ConversationTab | null
-  })
   const [showSessionDetailPanel, setShowSessionDetailPanel] = useState(false)
   const [sessionDetail, setSessionDetail] = useState<SessionDetail | null>(null)
   const [isLoadingSessionDetail, setIsLoadingSessionDetail] = useState(false)
@@ -941,8 +935,6 @@ function ExportPage() {
   const preselectAppliedRef = useRef(false)
   const exportCacheScopeRef = useRef('default')
   const exportCacheScopeReadyRef = useRef(false)
-  const activeTabRef = useRef<ConversationTab>('private')
-  const contactsDataRef = useRef<ContactInfo[]>([])
   const contactsLoadVersionRef = useRef(0)
   const contactsLoadAttemptRef = useRef(0)
   const contactsLoadTimeoutTimerRef = useRef<number | null>(null)
@@ -1059,128 +1051,8 @@ function ExportPage() {
     contactsLoadTimeoutMsRef.current = contactsLoadTimeoutMs
   }, [contactsLoadTimeoutMs])
 
-  useEffect(() => {
-    activeTabRef.current = activeTab
-  }, [activeTab])
-
-  useEffect(() => {
-    contactsDataRef.current = contactsList
-  }, [contactsList])
-
-  const applyEnrichedContactsToList = useCallback((enrichedMap: Record<string, { displayName?: string; avatarUrl?: string }>) => {
-    if (!enrichedMap || Object.keys(enrichedMap).length === 0) return
-    setContactsList(prev => {
-      let changed = false
-      const next = prev.map(contact => {
-        const enriched = enrichedMap[contact.username]
-        if (!enriched) return contact
-        const displayName = enriched.displayName || contact.displayName
-        const avatarUrl = enriched.avatarUrl || contact.avatarUrl
-        if (displayName === contact.displayName && avatarUrl === contact.avatarUrl) {
-          return contact
-        }
-        changed = true
-        return {
-          ...contact,
-          displayName,
-          avatarUrl
-        }
-      })
-      return changed ? next : prev
-    })
-  }, [])
-
-  const enrichContactsListInBackground = useCallback(async (
-    sourceContacts: ContactInfo[],
-    loadVersion: number,
-    scopeKey: string,
-    targetTab: ConversationTab
-  ) => {
-    const sourceByUsername = new Map<string, ContactInfo>()
-    for (const contact of sourceContacts) {
-      if (!contact.username) continue
-      sourceByUsername.set(contact.username, contact)
-    }
-
-    const usernames = Array.from(new Set(sourceContacts
-      .filter(contact => matchesContactTab(contact, targetTab))
-      .map(contact => contact.username)
-      .filter(Boolean)
-      .filter((username) => {
-        const currentContact = sourceByUsername.get(username)
-        return Boolean(currentContact && !currentContact.avatarUrl)
-      })))
-
-    const total = usernames.length
-    setContactsAvatarEnrichProgress({
-      loaded: 0,
-      total,
-      running: total > 0,
-      tab: targetTab
-    })
-    if (total === 0) return
-
-    for (let i = 0; i < total; i += EXPORT_AVATAR_ENRICH_BATCH_SIZE) {
-      if (contactsLoadVersionRef.current !== loadVersion) return
-      const batch = usernames.slice(i, i + EXPORT_AVATAR_ENRICH_BATCH_SIZE)
-      if (batch.length === 0) continue
-
-      try {
-        const avatarResult = await withTimeout(
-          window.electronAPI.chat.enrichSessionsContactInfo(batch, {
-            skipDisplayName: true,
-            onlyMissingAvatar: true
-          }),
-          CONTACT_ENRICH_TIMEOUT_MS
-        )
-        if (contactsLoadVersionRef.current !== loadVersion) return
-        if (avatarResult?.success && avatarResult.contacts) {
-          applyEnrichedContactsToList(avatarResult.contacts)
-          for (const [username, enriched] of Object.entries(avatarResult.contacts)) {
-            const prev = sourceByUsername.get(username)
-            if (!prev) continue
-            sourceByUsername.set(username, {
-              ...prev,
-              displayName: enriched.displayName || prev.displayName,
-              avatarUrl: enriched.avatarUrl || prev.avatarUrl
-            })
-          }
-        }
-
-        const batchContacts = batch
-          .map(username => sourceByUsername.get(username))
-          .filter((contact): contact is ContactInfo => Boolean(contact))
-        const upsertResult = upsertAvatarCacheFromContacts(
-          contactsAvatarCacheRef.current,
-          batchContacts,
-          { markCheckedUsernames: batch }
-        )
-        contactsAvatarCacheRef.current = upsertResult.avatarEntries
-        if (upsertResult.updatedAt) {
-          setAvatarCacheUpdatedAt(upsertResult.updatedAt)
-        }
-      } catch (error) {
-        console.error('导出页分批补全头像失败:', error)
-      }
-
-      const loaded = Math.min(i + batch.length, total)
-      setContactsAvatarEnrichProgress({
-        loaded,
-        total,
-        running: loaded < total,
-        tab: targetTab
-      })
-      await new Promise(resolve => setTimeout(resolve, 0))
-    }
-
-    void configService.setContactsAvatarCache(scopeKey, contactsAvatarCacheRef.current).catch((error) => {
-      console.error('写入导出页头像缓存失败:', error)
-    })
-  }, [applyEnrichedContactsToList])
-
   const loadContactsList = useCallback(async (options?: { scopeKey?: string }) => {
     const scopeKey = options?.scopeKey || await ensureExportCacheScope()
-    const targetTab = activeTabRef.current
     const loadVersion = contactsLoadVersionRef.current + 1
     contactsLoadVersionRef.current = loadVersion
     contactsLoadAttemptRef.current += 1
@@ -1214,13 +1086,6 @@ function ExportPage() {
     contactsLoadTimeoutTimerRef.current = timeoutTimerId
 
     setIsContactsListLoading(true)
-    setContactsAvatarEnrichProgress({
-      loaded: 0,
-      total: 0,
-      running: false,
-      tab: null
-    })
-
     try {
       const contactsResult = await window.electronAPI.chat.getContacts()
       if (contactsLoadVersionRef.current !== loadVersion) return
@@ -1266,7 +1131,6 @@ function ExportPage() {
         ).catch((error) => {
           console.error('写入导出页通讯录缓存失败:', error)
         })
-        void enrichContactsListInBackground(contactsWithAvatarCache, loadVersion, scopeKey, targetTab)
         return
       }
 
@@ -1301,7 +1165,7 @@ function ExportPage() {
         setIsContactsListLoading(false)
       }
     }
-  }, [ensureExportCacheScope, enrichContactsListInBackground, syncContactTypeCounts])
+  }, [ensureExportCacheScope, syncContactTypeCounts])
 
   useEffect(() => {
     if (!isExportRoute) return
@@ -1342,28 +1206,8 @@ function ExportPage() {
   }, [isExportRoute, ensureExportCacheScope, loadContactsList, syncContactTypeCounts])
 
   useEffect(() => {
-    if (!isExportRoute || isContactsListLoading || contactsDataRef.current.length === 0) return
-    let cancelled = false
-    const loadVersion = contactsLoadVersionRef.current
-    void (async () => {
-      const scopeKey = await ensureExportCacheScope()
-      if (cancelled || contactsLoadVersionRef.current !== loadVersion) return
-      await enrichContactsListInBackground(contactsDataRef.current, loadVersion, scopeKey, activeTab)
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [activeTab, ensureExportCacheScope, enrichContactsListInBackground, isContactsListLoading, isExportRoute])
-
-  useEffect(() => {
     if (isExportRoute) return
     contactsLoadVersionRef.current += 1
-    setContactsAvatarEnrichProgress({
-      loaded: 0,
-      total: 0,
-      running: false,
-      tab: null
-    })
   }, [isExportRoute])
 
   useEffect(() => {
@@ -3203,8 +3047,6 @@ function ExportPage() {
       contact.avatarUrl ? count + 1 : count
     ), 0)
   }, [contactsList])
-  const isCurrentTabAvatarEnrichRunning = contactsAvatarEnrichProgress.running && contactsAvatarEnrichProgress.tab === activeTab
-
   useEffect(() => {
     if (!contactsListRef.current) return
     contactsListRef.current.scrollTop = 0
@@ -3938,20 +3780,15 @@ function ExportPage() {
               {avatarCacheUpdatedAtLabel ? ` · 更新于 ${avatarCacheUpdatedAtLabel}` : ''}
             </span>
           )}
-          {(isContactsListLoading || isCurrentTabAvatarEnrichRunning) && contactsList.length > 0 && (
+          {isContactsListLoading && contactsList.length > 0 && (
             <span className="meta-item syncing">后台同步中...</span>
-          )}
-          {isCurrentTabAvatarEnrichRunning && (
-            <span className="meta-item syncing">
-              头像补全中 {contactsAvatarEnrichProgress.loaded}/{contactsAvatarEnrichProgress.total}
-            </span>
           )}
         </div>
 
-        {contactsList.length > 0 && (isContactsListLoading || isCurrentTabAvatarEnrichRunning) && (
+        {contactsList.length > 0 && isContactsListLoading && (
           <div className="table-stage-hint">
             <Loader2 size={14} className="spin" />
-            {isContactsListLoading ? '联系人列表同步中…' : '正在补充头像…'}
+            联系人列表同步中…
           </div>
         )}
 

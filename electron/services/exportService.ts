@@ -2722,128 +2722,6 @@ class ExportService {
     return result
   }
 
-  private async collectPrivateMutualGroupStats(
-    privateWxid: string,
-    myWxid: string
-  ): Promise<{
-    totalGroups: number
-    totalMessagesByMe: number
-    totalMessagesByPeer: number
-    totalMessagesCombined: number
-    groups: Array<{
-      wxid: string
-      displayName: string
-      myMessageCount: number
-      peerMessageCount: number
-      totalMessageCount: number
-    }>
-  }> {
-    const normalizedPrivateWxid = String(privateWxid || '').trim()
-    const normalizedMyWxid = String(myWxid || '').trim()
-    if (!normalizedPrivateWxid || !normalizedMyWxid) {
-      return {
-        totalGroups: 0,
-        totalMessagesByMe: 0,
-        totalMessagesByPeer: 0,
-        totalMessagesCombined: 0,
-        groups: []
-      }
-    }
-
-    const sessionsResult = await wcdbService.getSessions()
-    if (!sessionsResult.success || !sessionsResult.sessions) {
-      return {
-        totalGroups: 0,
-        totalMessagesByMe: 0,
-        totalMessagesByPeer: 0,
-        totalMessagesCombined: 0,
-        groups: []
-      }
-    }
-
-    const groupIds = Array.from(
-      new Set(
-        (sessionsResult.sessions as Array<Record<string, any>>)
-          .map((row) => String(row.username || row.user_name || row.userName || '').trim())
-          .filter((username) => username.endsWith('@chatroom'))
-      )
-    )
-    if (groupIds.length === 0) {
-      return {
-        totalGroups: 0,
-        totalMessagesByMe: 0,
-        totalMessagesByPeer: 0,
-        totalMessagesCombined: 0,
-        groups: []
-      }
-    }
-
-    const mutualGroups = await parallelLimit(groupIds, 4, async (groupId) => {
-      const membersResult = await wcdbService.getGroupMembers(groupId)
-      if (!membersResult.success || !membersResult.members || membersResult.members.length === 0) {
-        return null
-      }
-
-      let hasMe = false
-      let hasPeer = false
-      for (const member of membersResult.members) {
-        const memberWxid = this.extractGroupMemberUsername(member)
-        if (!memberWxid) continue
-        if (!hasMe && this.isSameWxid(memberWxid, normalizedMyWxid)) {
-          hasMe = true
-        }
-        if (!hasPeer && this.isSameWxid(memberWxid, normalizedPrivateWxid)) {
-          hasPeer = true
-        }
-        if (hasMe && hasPeer) break
-      }
-      if (!hasMe || !hasPeer) return null
-
-      const [groupInfo, groupStatsResult] = await Promise.all([
-        this.getContactInfo(groupId),
-        wcdbService.getGroupStats(groupId, 0, 0)
-      ])
-      const senderCountMap = groupStatsResult.success && groupStatsResult.data
-        ? this.extractGroupSenderCountMap(groupStatsResult.data, groupId)
-        : new Map<string, number>()
-      const myMessageCount = this.sumSenderCountsByIdentity(senderCountMap, normalizedMyWxid)
-      const peerMessageCount = this.sumSenderCountsByIdentity(senderCountMap, normalizedPrivateWxid)
-      const totalMessageCount = myMessageCount + peerMessageCount
-
-      return {
-        wxid: groupId,
-        displayName: groupInfo.displayName || groupId,
-        myMessageCount,
-        peerMessageCount,
-        totalMessageCount
-      }
-    })
-
-    const groups = mutualGroups
-      .filter((item): item is {
-        wxid: string
-        displayName: string
-        myMessageCount: number
-        peerMessageCount: number
-        totalMessageCount: number
-      } => Boolean(item))
-      .sort((a, b) => {
-        if (b.totalMessageCount !== a.totalMessageCount) return b.totalMessageCount - a.totalMessageCount
-        return a.displayName.localeCompare(b.displayName, 'zh-CN')
-      })
-
-    const totalMessagesByMe = groups.reduce((sum, item) => sum + item.myMessageCount, 0)
-    const totalMessagesByPeer = groups.reduce((sum, item) => sum + item.peerMessageCount, 0)
-
-    return {
-      totalGroups: groups.length,
-      totalMessagesByMe,
-      totalMessagesByPeer,
-      totalMessagesCombined: totalMessagesByMe + totalMessagesByPeer,
-      groups
-    }
-  }
-
   private resolveAvatarFile(avatarUrl?: string): { data?: Buffer; sourcePath?: string; sourceUrl?: string; ext: string; mime?: string } | null {
     if (!avatarUrl) return null
     if (avatarUrl.startsWith('data:')) {
@@ -3998,19 +3876,6 @@ class ExportService {
         const arkmeSession: any = {
           ...sessionPayload
         }
-        let privateMutualGroups: {
-          totalGroups: number
-          totalMessagesByMe: number
-          totalMessagesByPeer: number
-          totalMessagesCombined: number
-          groups: Array<{
-            wxid: string
-            displayName: string
-            myMessageCount: number
-            peerMessageCount: number
-            totalMessageCount: number
-          }>
-        } | undefined
         let groupMembers: Array<{
           wxid: string
           displayName: string
@@ -4082,8 +3947,6 @@ class ExportService {
             if (b.messageCount !== a.messageCount) return b.messageCount - a.messageCount
             return String(a.displayName || a.wxid).localeCompare(String(b.displayName || b.wxid), 'zh-CN')
           })
-        } else if (!sessionId.startsWith('gh_')) {
-          privateMutualGroups = await this.collectPrivateMutualGroupStats(sessionId, cleanedMyWxid)
         }
 
         const arkmeExport: any = {
@@ -4094,9 +3957,6 @@ class ExportService {
           session: arkmeSession,
           senders,
           messages: compactMessages
-        }
-        if (privateMutualGroups) {
-          arkmeExport.privateMutualGroups = privateMutualGroups
         }
         if (groupMembers) {
           arkmeExport.groupMembers = groupMembers
