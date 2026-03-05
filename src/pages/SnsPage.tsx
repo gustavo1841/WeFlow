@@ -504,7 +504,10 @@ export default function SnsPage() {
         }
     }, [])
 
-    const hydrateContactPostCounts = useCallback(async (usernames: string[], options?: { force?: boolean }) => {
+    const hydrateContactPostCounts = useCallback(async (
+        usernames: string[],
+        options?: { force?: boolean; readyUsernames?: Set<string> }
+    ) => {
         const force = options?.force === true
         const targets = usernames
             .map((username) => String(username || '').trim())
@@ -512,7 +515,7 @@ export default function SnsPage() {
         stopContactsCountHydration(true)
         if (targets.length === 0) return
 
-        const readySet = new Set(
+        const readySet = options?.readyUsernames || new Set(
             contactsRef.current
                 .filter((contact) => contact.postCountStatus === 'ready' && typeof contact.postCount === 'number')
                 .map((contact) => contact.username)
@@ -625,8 +628,42 @@ export default function SnsPage() {
         setContactsLoading(true)
         try {
             const snsPostCountsScopeKey = await ensureSnsUserPostCountsCacheScopeKey()
-            const cachedPostCountsItem = await configService.getExportSnsUserPostCountsCache(snsPostCountsScopeKey)
+            const [cachedPostCountsItem, cachedContactsItem, cachedAvatarItem] = await Promise.all([
+                configService.getExportSnsUserPostCountsCache(snsPostCountsScopeKey),
+                configService.getContactsListCache(snsPostCountsScopeKey),
+                configService.getContactsAvatarCache(snsPostCountsScopeKey)
+            ])
             const cachedPostCounts = cachedPostCountsItem?.counts || {}
+            const cachedAvatarMap = cachedAvatarItem?.avatars || {}
+            const cachedContacts = (cachedContactsItem?.contacts || [])
+                .filter((contact) => contact.type === 'friend' || contact.type === 'former_friend')
+                .map((contact) => {
+                    const cachedCount = cachedPostCounts[contact.username]
+                    const hasCachedCount = typeof cachedCount === 'number' && Number.isFinite(cachedCount)
+                    return {
+                        username: contact.username,
+                        displayName: contact.displayName || contact.username,
+                        avatarUrl: cachedAvatarMap[contact.username]?.avatarUrl,
+                        type: (contact.type === 'former_friend' ? 'former_friend' : 'friend') as 'friend' | 'former_friend',
+                        lastSessionTimestamp: 0,
+                        postCount: hasCachedCount ? Math.max(0, Math.floor(cachedCount)) : undefined,
+                        postCountStatus: hasCachedCount ? 'ready' as ContactPostCountStatus : 'idle' as ContactPostCountStatus
+                    }
+                })
+
+            if (requestToken !== contactsLoadTokenRef.current) return
+            if (cachedContacts.length > 0) {
+                const cachedContactsSorted = sortContactsForRanking(cachedContacts)
+                setContacts(cachedContactsSorted)
+                setContactsLoading(false)
+                const cachedReadyCount = cachedContactsSorted.filter(contact => contact.postCountStatus === 'ready').length
+                setContactsCountProgress({
+                    resolved: cachedReadyCount,
+                    total: cachedContactsSorted.length,
+                    running: cachedReadyCount < cachedContactsSorted.length
+                })
+            }
+
             const [contactsResult, sessionsResult] = await Promise.all([
                 window.electronAPI.chat.getContacts(),
                 window.electronAPI.chat.getSessions()
@@ -670,7 +707,15 @@ export default function SnsPage() {
             let contactsList = sortContactsForRanking(Array.from(contactMap.values()))
             if (requestToken !== contactsLoadTokenRef.current) return
             setContacts(contactsList)
-            void hydrateContactPostCounts(contactsList.map(contact => contact.username))
+            const readyUsernames = new Set(
+                contactsList
+                    .filter((contact) => contact.postCountStatus === 'ready' && typeof contact.postCount === 'number')
+                    .map((contact) => contact.username)
+            )
+            void hydrateContactPostCounts(
+                contactsList.map(contact => contact.username),
+                { readyUsernames }
+            )
 
             const allUsernames = contactsList.map(c => c.username)
 
@@ -880,6 +925,7 @@ export default function SnsPage() {
     useEffect(() => {
         const handleChange = () => {
             cacheScopeKeyRef.current = ''
+            snsUserPostCountsCacheScopeKeyRef.current = ''
             // wxid changed, reset everything
             stopContactsCountHydration(true)
             setContacts([])

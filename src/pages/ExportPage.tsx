@@ -1977,8 +1977,40 @@ function ExportPage() {
       return
     }
 
-    patchSessionLoadTraceStage(targetSessionIds, 'snsPostCounts', 'pending', { force: true })
-    patchSessionLoadTraceStage(targetSessionIds, 'snsPostCounts', 'loading')
+    const scopeKey = exportCacheScopeReadyRef.current
+      ? exportCacheScopeRef.current
+      : await ensureExportCacheScope()
+    const targetSet = new Set(targetSessionIds)
+    let cachedCounts: Record<string, number> = {}
+    try {
+      const cached = await configService.getExportSnsUserPostCountsCache(scopeKey)
+      cachedCounts = cached?.counts || {}
+    } catch (cacheError) {
+      console.error('读取导出页朋友圈条数缓存失败:', cacheError)
+    }
+
+    const cachedTargetCounts = Object.entries(cachedCounts).reduce<Record<string, number>>((acc, [sessionId, countRaw]) => {
+      if (!targetSet.has(sessionId)) return acc
+      const nextCount = Number(countRaw)
+      acc[sessionId] = Number.isFinite(nextCount) ? Math.max(0, Math.floor(nextCount)) : 0
+      return acc
+    }, {})
+    const cachedReadySessionIds = Object.keys(cachedTargetCounts)
+    if (cachedReadySessionIds.length > 0) {
+      setSnsUserPostCounts(prev => ({ ...prev, ...cachedTargetCounts }))
+      patchSessionLoadTraceStage(cachedReadySessionIds, 'snsPostCounts', 'done')
+    }
+
+    const pendingSessionIds = options?.force
+      ? targetSessionIds
+      : targetSessionIds.filter((sessionId) => !(sessionId in cachedTargetCounts))
+    if (pendingSessionIds.length === 0) {
+      setSnsUserPostCountsStatus('ready')
+      return
+    }
+
+    patchSessionLoadTraceStage(pendingSessionIds, 'snsPostCounts', 'pending', { force: true })
+    patchSessionLoadTraceStage(pendingSessionIds, 'snsPostCounts', 'loading')
     setSnsUserPostCountsStatus('loading')
 
     let normalizedCounts: Record<string, number> = {}
@@ -1987,7 +2019,7 @@ function ExportPage() {
       if (runToken !== snsUserPostCountsHydrationTokenRef.current) return
 
       if (!result.success || !result.counts) {
-        patchSessionLoadTraceStage(targetSessionIds, 'snsPostCounts', 'failed', {
+        patchSessionLoadTraceStage(pendingSessionIds, 'snsPostCounts', 'failed', {
           error: result.error || '朋友圈条数统计失败'
         })
         setSnsUserPostCountsStatus('error')
@@ -2003,9 +2035,6 @@ function ExportPage() {
 
       void (async () => {
         try {
-          const scopeKey = exportCacheScopeReadyRef.current
-            ? exportCacheScopeRef.current
-            : await ensureExportCacheScope()
           await configService.setExportSnsUserPostCountsCache(scopeKey, normalizedCounts)
         } catch (cacheError) {
           console.error('写入导出页朋友圈条数缓存失败:', cacheError)
@@ -2014,7 +2043,7 @@ function ExportPage() {
     } catch (error) {
       console.error('加载朋友圈用户条数失败:', error)
       if (runToken !== snsUserPostCountsHydrationTokenRef.current) return
-      patchSessionLoadTraceStage(targetSessionIds, 'snsPostCounts', 'failed', {
+      patchSessionLoadTraceStage(pendingSessionIds, 'snsPostCounts', 'failed', {
         error: String(error)
       })
       setSnsUserPostCountsStatus('error')
@@ -2025,7 +2054,7 @@ function ExportPage() {
     const applyBatch = () => {
       if (runToken !== snsUserPostCountsHydrationTokenRef.current) return
 
-      const batchSessionIds = targetSessionIds.slice(cursor, cursor + SNS_USER_POST_COUNT_BATCH_SIZE)
+      const batchSessionIds = pendingSessionIds.slice(cursor, cursor + SNS_USER_POST_COUNT_BATCH_SIZE)
       if (batchSessionIds.length === 0) {
         setSnsUserPostCountsStatus('ready')
         snsUserPostCountsBatchTimerRef.current = null
@@ -2984,7 +3013,7 @@ function ExportPage() {
     }
     setIsSessionEnriching(false)
     setIsLoadingSessionCounts(false)
-    setSnsUserPostCountsStatus('idle')
+    setSnsUserPostCountsStatus(prev => (prev === 'loading' ? 'idle' : prev))
   }, [isExportRoute])
 
   useEffect(() => {
