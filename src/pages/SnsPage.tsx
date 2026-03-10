@@ -63,6 +63,7 @@ interface SnsOverviewStats {
 }
 
 type OverviewStatsStatus = 'loading' | 'ready' | 'error'
+type SnsExportScope = { kind: 'all' } | { kind: 'selected'; usernames: string[] }
 
 const SIDEBAR_USER_PROFILE_CACHE_KEY = 'sidebar_user_profile_cache_v1'
 
@@ -123,6 +124,7 @@ export default function SnsPage() {
         total: 0,
         running: false
     })
+    const [selectedContactUsernames, setSelectedContactUsernames] = useState<string[]>([])
     const [currentUserProfile, setCurrentUserProfile] = useState<SidebarUserProfile>(() => readSidebarUserProfileCache() || {
         wxid: '',
         displayName: ''
@@ -140,6 +142,7 @@ export default function SnsPage() {
 
     // 导出相关状态
     const [showExportDialog, setShowExportDialog] = useState(false)
+    const [exportScope, setExportScope] = useState<SnsExportScope>({ kind: 'all' })
     const [exportFormat, setExportFormat] = useState<'json' | 'html' | 'arkmejson'>('html')
     const [exportFolder, setExportFolder] = useState('')
     const [exportImages, setExportImages] = useState(false)
@@ -185,6 +188,13 @@ export default function SnsPage() {
     }, [posts])
     useEffect(() => {
         contactsRef.current = contacts
+    }, [contacts])
+    useEffect(() => {
+        const contactLookup = new Set(contacts.map((contact) => contact.username))
+        setSelectedContactUsernames((prev) => {
+            const next = prev.filter((username) => contactLookup.has(username))
+            return next.length === prev.length ? prev : next
+        })
     }, [contacts])
     useEffect(() => {
         overviewStatsRef.current = overviewStats
@@ -376,6 +386,14 @@ export default function SnsPage() {
         return contacts.find((contact) => contact.username === normalizedTargetUsername) || null
     }, [authorTimelineTarget, contacts])
 
+    const exportSelectedContactsSummary = useMemo(() => {
+        if (exportScope.kind !== 'selected' || exportScope.usernames.length === 0) return ''
+        const contactMap = new Map(contacts.map((contact) => [contact.username, contact]))
+        const names = exportScope.usernames.map((username) => contactMap.get(username)?.displayName || username)
+        if (names.length <= 2) return names.join('、')
+        return `${names.slice(0, 2).join('、')} 等 ${names.length} 位联系人`
+    }, [contacts, exportScope])
+
     const myTimelineCount = useMemo(() => {
         if (resolvedCurrentUserContact?.postCountStatus === 'ready' && typeof resolvedCurrentUserContact.postCount === 'number') {
             return normalizePostCount(resolvedCurrentUserContact.postCount)
@@ -387,6 +405,10 @@ export default function SnsPage() {
         resolvedCurrentUserContact
             ? resolvedCurrentUserContact.postCountStatus !== 'ready'
             : overviewStatsStatus === 'loading' || contactsLoading
+    )
+
+    const canStartExport = Boolean(exportFolder) && !isExporting && (
+        exportScope.kind === 'all' || exportScope.usernames.length > 0
     )
 
     const openCurrentUserTimeline = useCallback(() => {
@@ -560,6 +582,15 @@ export default function SnsPage() {
     }
 
     const exportDateRangeLabel = useMemo(() => getExportDateRangeLabel(exportDateRangeSelection), [exportDateRangeSelection])
+
+    const openExportDialog = useCallback((scope: SnsExportScope) => {
+        setExportScope(scope)
+        setExportResult(null)
+        setExportProgress(null)
+        setExportDateRangeSelection(createExportDateRangeSelectionFromPreset('all'))
+        setIsExportDateRangeDialogOpen(false)
+        setShowExportDialog(true)
+    }, [])
 
     const loadPosts = useCallback(async (options: { reset?: boolean, direction?: 'older' | 'newer' } = {}) => {
         const { reset = false, direction = 'older' } = options
@@ -1040,6 +1071,23 @@ export default function SnsPage() {
         })
     }, [])
 
+    const toggleContactSelected = useCallback((contact: Contact) => {
+        setSelectedContactUsernames((prev) => (
+            prev.includes(contact.username)
+                ? prev.filter((username) => username !== contact.username)
+                : [...prev, contact.username]
+        ))
+    }, [])
+
+    const clearSelectedContacts = useCallback(() => {
+        setSelectedContactUsernames([])
+    }, [])
+
+    const openSelectedContactsExport = useCallback(() => {
+        if (selectedContactUsernames.length === 0) return
+        openExportDialog({ kind: 'selected', usernames: [...selectedContactUsernames] })
+    }, [openExportDialog, selectedContactUsernames])
+
     const handlePostDelete = useCallback((postId: string, username: string) => {
         setPosts(prev => {
             const next = prev.filter(p => p.id !== postId)
@@ -1264,13 +1312,7 @@ export default function SnsPage() {
                                 <Shield size={20} />
                             </button>
                             <button
-                                onClick={() => {
-                                    setExportResult(null)
-                                    setExportProgress(null)
-                                    setExportDateRangeSelection(createExportDateRangeSelectionFromPreset('all'))
-                                    setIsExportDateRangeDialogOpen(false)
-                                    setShowExportDialog(true)
-                                }}
+                                onClick={() => openExportDialog({ kind: 'all' })}
                                 className="icon-btn export-btn"
                                 title="导出朋友圈"
                             >
@@ -1377,7 +1419,12 @@ export default function SnsPage() {
                 setContactSearch={setContactSearch}
                 loading={contactsLoading}
                 contactsCountProgress={contactsCountProgress}
+                selectedContactUsernames={selectedContactUsernames}
+                activeContactUsername={authorTimelineTarget?.username}
                 onOpenContactTimeline={openContactTimeline}
+                onToggleContactSelected={toggleContactSelected}
+                onClearSelectedContacts={clearSelectedContacts}
+                onExportSelectedContacts={openSelectedContactsExport}
             />
 
             {/* Dialogs and Overlays */}
@@ -1522,9 +1569,12 @@ export default function SnsPage() {
 
                         <div className="export-dialog-body">
                             {/* 筛选条件提示 */}
-                            {searchKeyword && (
+                            {(searchKeyword || exportScope.kind === 'selected') && (
                                 <div className="export-filter-info">
-                                    <span className="filter-badge">筛选导出</span>
+                                    <span className="filter-badge">导出范围</span>
+                                    {exportScope.kind === 'selected' && (
+                                        <span className="filter-tag">联系人: {exportSelectedContactsSummary}</span>
+                                    )}
                                     {searchKeyword && <span className="filter-tag">关键词: "{searchKeyword}"</span>}
                                 </div>
                             )}
@@ -1650,7 +1700,7 @@ export default function SnsPage() {
                                     {/* 同步提示 */}
                                     <div className="export-sync-hint">
                                         <Info size={14} />
-                                        <span>将同步主页面的关键词搜索</span>
+                                        <span>{exportScope.kind === 'selected' ? '将同步主页面的关键词搜索，并仅导出所选联系人' : '将同步主页面的关键词搜索'}</span>
                                     </div>
 
                                     {/* 进度条 */}
@@ -1677,7 +1727,7 @@ export default function SnsPage() {
                                         </button>
                                         <button
                                             className="export-start-btn"
-                                            disabled={!exportFolder || isExporting}
+                                            disabled={!canStartExport}
                                             onClick={async () => {
                                                 setIsExporting(true)
                                                 setExportProgress({ current: 0, total: 0, status: '准备导出...' })
@@ -1692,6 +1742,7 @@ export default function SnsPage() {
                                                     const result = await window.electronAPI.sns.exportTimeline({
                                                         outputDir: exportFolder,
                                                         format: exportFormat,
+                                                        usernames: exportScope.kind === 'selected' ? exportScope.usernames : undefined,
                                                         keyword: searchKeyword || undefined,
                                                         exportImages,
                                                         exportLivePhotos,
