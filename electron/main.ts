@@ -17,6 +17,7 @@ import { annualReportService } from './services/annualReportService'
 import { exportService, ExportOptions, ExportProgress } from './services/exportService'
 import { KeyService } from './services/keyService'
 import { KeyServiceMac } from './services/keyServiceMac'
+import { KeyServiceLinux} from "./services/keyServiceLinux"
 import { voiceTranscribeService } from './services/voiceTranscribeService'
 import { videoService } from './services/videoService'
 import { snsService, isVideoUrl } from './services/snsService'
@@ -95,7 +96,7 @@ let keyService: any
 if (process.platform === 'darwin') {
   keyService = new KeyServiceMac()
 } else if (process.platform === 'linux') {
-  const { KeyServiceLinux } = require('./services/keyServiceLinux')
+   // const { KeyServiceLinux } = require('./services/keyServiceLinux')
   keyService = new KeyServiceLinux()
 } else {
   keyService = new KeyService()
