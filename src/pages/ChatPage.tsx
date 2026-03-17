@@ -6489,6 +6489,10 @@ function MessageBubble({
     return 'image/jpeg'
   }, [])
 
+  const getImageObserverRoot = useCallback((): Element | null => {
+    return imageContainerRef.current?.closest('.message-list') ?? null
+  }, [])
+
   // 获取头像首字母
   const getAvatarLetter = (name: string): string => {
     if (!name) return '?'
@@ -6793,34 +6797,25 @@ function MessageBubble({
     const observer = new IntersectionObserver(
       (entries) => {
         const entry = entries[0]
-        // rootMargin 设置为 200px，提前触发解密
-        if (entry.isIntersecting && !imageAutoDecryptTriggered.current) {
-          imageAutoDecryptTriggered.current = true
-          void requestImageDecrypt()
-        }
-      },
-      { rootMargin: '200px', threshold: 0 }
-    )
-
-    observer.observe(container)
-    return () => observer.disconnect()
-  }, [isImage, imageLocalPath, message.imageMd5, message.imageDatName, requestImageDecrypt])
-
-  // 进入视野时自动尝试切换高清图
-  useEffect(() => {
-    if (!isImage) return
-    const container = imageContainerRef.current
-    if (!container) return
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const entry = entries[0]
+        // rootMargin 设置为 200px，提前感知即将进入视野的图片
         setImageInView(entry.isIntersecting)
       },
-      { rootMargin: '120px', threshold: 0 }
+      { root: getImageObserverRoot(), rootMargin: '200px', threshold: 0 }
     )
+
     observer.observe(container)
     return () => observer.disconnect()
-  }, [isImage])
+  }, [getImageObserverRoot, isImage])
+
+  // 进入视野后自动触发一次普通解密
+  useEffect(() => {
+    if (!isImage || !imageInView) return
+    if (imageLocalPath || imageLoading) return
+    if (!message.imageMd5 && !message.imageDatName) return
+    if (imageAutoDecryptTriggered.current) return
+    imageAutoDecryptTriggered.current = true
+    void requestImageDecrypt()
+  }, [isImage, imageInView, imageLocalPath, imageLoading, message.imageMd5, message.imageDatName, requestImageDecrypt])
 
   useEffect(() => {
     if (!isImage || !imageHasUpdate || !imageInView) return

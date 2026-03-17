@@ -154,9 +154,38 @@ export class ImageDecryptService {
 
   async decryptImage(payload: { sessionId?: string; imageMd5?: string; imageDatName?: string; force?: boolean }): Promise<DecryptResult> {
     await this.ensureCacheIndexed()
-    const cacheKey = payload.imageMd5 || payload.imageDatName
+    const cacheKeys = this.getCacheKeys(payload)
+    const cacheKey = cacheKeys[0]
     if (!cacheKey) {
       return { success: false, error: '缺少图片标识' }
+    }
+
+    if (payload.force) {
+      for (const key of cacheKeys) {
+        const cached = this.resolvedCache.get(key)
+        if (cached && existsSync(cached) && this.isImageFile(cached) && !this.isThumbnailPath(cached)) {
+          this.cacheResolvedPaths(cacheKey, payload.imageMd5, payload.imageDatName, cached)
+          this.clearUpdateFlags(cacheKey, payload.imageMd5, payload.imageDatName)
+          const dataUrl = this.fileToDataUrl(cached)
+          const localPath = dataUrl || this.filePathToUrl(cached)
+          this.emitCacheResolved(payload, cacheKey, localPath)
+          return { success: true, localPath }
+        }
+        if (cached && !this.isImageFile(cached)) {
+          this.resolvedCache.delete(key)
+        }
+      }
+
+      for (const key of cacheKeys) {
+        const existingHd = this.findCachedOutput(key, true, payload.sessionId)
+        if (!existingHd || this.isThumbnailPath(existingHd)) continue
+        this.cacheResolvedPaths(cacheKey, payload.imageMd5, payload.imageDatName, existingHd)
+        this.clearUpdateFlags(cacheKey, payload.imageMd5, payload.imageDatName)
+        const dataUrl = this.fileToDataUrl(existingHd)
+        const localPath = dataUrl || this.filePathToUrl(existingHd)
+        this.emitCacheResolved(payload, cacheKey, localPath)
+        return { success: true, localPath }
+      }
     }
 
     if (!payload.force) {
