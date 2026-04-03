@@ -12,6 +12,7 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   FIXED_PREVIEW_TAG: nightly-preview
+  TARGET_BRANCH: main
   ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
 
 jobs:
@@ -24,6 +25,7 @@ jobs:
       - name: Check out git repository
         uses: actions/checkout@v5
         with:
+          ref: ${{ env.TARGET_BRANCH }}
           fetch-depth: 0
 
       - name: Install Node.js
@@ -88,6 +90,7 @@ jobs:
       - name: Check out git repository
         uses: actions/checkout@v5
         with:
+          ref: ${{ env.TARGET_BRANCH }}
           fetch-depth: 0
 
       - name: Install Node.js
@@ -140,6 +143,7 @@ jobs:
       - name: Check out git repository
         uses: actions/checkout@v5
         with:
+          ref: ${{ env.TARGET_BRANCH }}
           fetch-depth: 0
 
       - name: Install Node.js
@@ -190,6 +194,7 @@ jobs:
       - name: Check out git repository
         uses: actions/checkout@v5
         with:
+          ref: ${{ env.TARGET_BRANCH }}
           fetch-depth: 0
 
       - name: Install Node.js
@@ -240,6 +245,7 @@ jobs:
       - name: Check out git repository
         uses: actions/checkout@v5
         with:
+          ref: ${{ env.TARGET_BRANCH }}
           fetch-depth: 0
 
       - name: Install Node.js
