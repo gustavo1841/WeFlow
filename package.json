@@ -13,13 +13,13 @@
   },
   "//": "二改不应改变此处的作者与应用信息",
   "scripts": {
-    "postinstall": "electron-builder install-app-deps",
+    "postinstall": "electron-builder install-app-deps && node scripts/prepare-electron-runtime.cjs",
     "rebuild": "electron-rebuild",
-    "dev": "vite",
+    "dev": "node scripts/prepare-electron-runtime.cjs && vite",
     "typecheck": "tsc --noEmit",
     "build": "tsc && vite build && electron-builder",
     "preview": "vite preview",
-    "electron:dev": "vite --mode electron",
+    "electron:dev": "node scripts/prepare-electron-runtime.cjs && vite --mode electron",
     "electron:build": "npm run build"
   },
   "dependencies": {
@@ -105,19 +105,19 @@
       "icon": "public/icon.ico",
       "extraFiles": [
         {
-          "from": "resources/msvcp140.dll",
+          "from": "resources/runtime/win32/msvcp140.dll",
           "to": "."
         },
         {
-          "from": "resources/msvcp140_1.dll",
+          "from": "resources/runtime/win32/msvcp140_1.dll",
           "to": "."
         },
         {
-          "from": "resources/vcruntime140.dll",
+          "from": "resources/runtime/win32/vcruntime140.dll",
           "to": "."
         },
         {
-          "from": "resources/vcruntime140_1.dll",
+          "from": "resources/runtime/win32/vcruntime140_1.dll",
           "to": "."
         }
       ]
