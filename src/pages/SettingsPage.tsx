@@ -6,7 +6,7 @@ import { useThemeStore, themes } from '../stores/themeStore'
 import { useAnalyticsStore } from '../stores/analyticsStore'
 import { dialog } from '../services/ipc'
 import * as configService from '../services/config'
-import type { ContactInfo } from '../types/models'
+import type { ChatSession, ContactInfo } from '../types/models'
 import {
   Eye, EyeOff, FolderSearch, FolderOpen, Search, Copy,
   RotateCcw, Trash2, Plug, Check, Sun, Moon, Monitor,
@@ -265,6 +265,7 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
   const [messagePushFilterSearchKeyword, setMessagePushFilterSearchKeyword] = useState('')
   const [messagePushTypeFilter, setMessagePushTypeFilter] = useState<SessionFilterTypeValue>('all')
   const [messagePushContactOptions, setMessagePushContactOptions] = useState<ContactInfo[]>([])
+  const [antiRevokeSessions, setAntiRevokeSessions] = useState<ChatSession[]>([])
   const [antiRevokeSearchKeyword, setAntiRevokeSearchKeyword] = useState('')
   const [antiRevokeSelectedIds, setAntiRevokeSelectedIds] = useState<Set<string>>(new Set())
   const [antiRevokeStatusMap, setAntiRevokeStatusMap] = useState<Record<string, { installed?: boolean; loading?: boolean; error?: string }>>({})
@@ -771,10 +772,10 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
     Array.from(new Set((sessionIds || []).map((id) => String(id || '').trim()).filter(Boolean)))
 
   const getCurrentAntiRevokeSessionIds = (): string[] =>
-    normalizeSessionIds(chatSessions.map((session) => session.username))
+    normalizeSessionIds(antiRevokeSessions.map((session) => session.username))
 
-  const ensureAntiRevokeSessionsLoaded = async (): Promise<string[]> => {
-    const current = getCurrentAntiRevokeSessionIds()
+  const ensureChatSessionsLoaded = async (): Promise<string[]> => {
+    const current = normalizeSessionIds(chatSessions.map((session) => session.username))
     if (current.length > 0) return current
     const sessionsResult = await window.electronAPI.chat.getSessions()
     if (!sessionsResult.success || !sessionsResult.sessions) {
@@ -782,6 +783,27 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
     }
     setChatSessions(sessionsResult.sessions)
     return normalizeSessionIds(sessionsResult.sessions.map((session) => session.username))
+  }
+
+  const ensureAntiRevokeSessionsLoaded = async (): Promise<string[]> => {
+    const current = getCurrentAntiRevokeSessionIds()
+    if (current.length > 0) return current
+    const sessionsResult = await window.electronAPI.chat.getAntiRevokeSessions()
+    if (!sessionsResult.success || !sessionsResult.sessions) {
+      throw new Error(sessionsResult.error || '加载会话失败')
+    }
+    const nextSessions = sessionsResult.sessions
+    const nextIds = normalizeSessionIds(nextSessions.map((session) => session.username))
+    setAntiRevokeSessions(nextSessions)
+    setAntiRevokeSelectedIds((prev) => {
+      const allowed = new Set(nextIds)
+      return new Set(Array.from(prev).filter((sessionId) => allowed.has(sessionId)))
+    })
+    setAntiRevokeStatusMap((prev) => {
+      const allowed = new Set(nextIds)
+      return Object.fromEntries(Object.entries(prev).filter(([sessionId]) => allowed.has(sessionId)))
+    })
+    return nextIds
   }
 
   const markAntiRevokeRowsLoading = (sessionIds: string[]) => {
@@ -995,11 +1017,10 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
     let canceled = false
     ;(async () => {
       try {
-        // 两个 Tab 都需要会话列表；antiRevoke 还需要额外检查防撤回状态
-        const sessionIds = await ensureAntiRevokeSessionsLoaded()
-        if (canceled) return
         if (activeTab === 'antiRevoke') {
-          await handleRefreshAntiRevokeStatus(sessionIds)
+          await ensureAntiRevokeSessionsLoaded()
+        } else {
+          await ensureChatSessionsLoaded()
         }
       } catch (e: any) {
         if (!canceled) {
@@ -2030,7 +2051,7 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
   }
 
   const renderAntiRevokeTab = () => {
-    const sortedSessions = [...chatSessions].sort((a, b) => (b.sortTimestamp || 0) - (a.sortTimestamp || 0))
+    const sortedSessions = [...antiRevokeSessions].sort((a, b) => (b.sortTimestamp || 0) - (a.sortTimestamp || 0))
     const keyword = antiRevokeSearchKeyword.trim().toLowerCase()
     const filteredSessions = sortedSessions.filter((session) => {
       if (!keyword) return true
@@ -4795,7 +4816,6 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
 }
 
 export default SettingsPage
-
 
 
 

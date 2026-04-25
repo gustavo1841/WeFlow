@@ -2241,6 +2241,10 @@ function registerIpcHandlers() {
     return chatService.getNewMessages(sessionId, minTime, limit)
   })
 
+  ipcMain.handle('chat:getAntiRevokeSessions', async () => {
+    return chatService.getAntiRevokeSessions()
+  })
+
   ipcMain.handle('chat:updateMessage', async (_, sessionId: string, localId: number, createTime: number, newContent: string) => {
     return chatService.updateMessage(sessionId, localId, createTime, newContent)
   })

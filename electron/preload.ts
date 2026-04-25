@@ -185,6 +185,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   chat: {
     connect: () => ipcRenderer.invoke('chat:connect'),
     getSessions: () => ipcRenderer.invoke('chat:getSessions'),
+    getAntiRevokeSessions: () => ipcRenderer.invoke('chat:getAntiRevokeSessions'),
     getSessionStatuses: (usernames: string[]) => ipcRenderer.invoke('chat:getSessionStatuses', usernames),
     getExportTabCounts: () => ipcRenderer.invoke('chat:getExportTabCounts'),
     getContactTypeCounts: () => ipcRenderer.invoke('chat:getContactTypeCounts'),

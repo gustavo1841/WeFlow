@@ -92,6 +92,9 @@ export class WcdbService {
         this.setPaths(this.resourcesPath, this.userDataPath)
       }
       this.setLogEnabled(this.logEnabled)
+      if (this.monitorListener) {
+        this.callWorker<{ success?: boolean }>('setMonitor').catch(() => { })
+      }
 
     } catch (e) {
       // Failed to create worker
